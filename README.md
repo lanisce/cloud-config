@@ -1,6 +1,6 @@
 # cloud-init helper
 
-<img alt="cloud-init" src="assets/cloud-init.png?raw=true" width="10%" align="right" />
+<img alt="cloud-init" src="assets/cloud-init.png?raw=true" width="15%" align="right" />
 
 
 > [Cloud-init](https://cloudinit.readthedocs.io/en/latest/index.html) is the industry standard multi-distribution method for cross-platform cloud 
