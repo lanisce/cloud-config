@@ -19,6 +19,7 @@ cd your-project
 # wherever you want the submodule
 mkdir vendors
 # add submodule - or just copy scripts you need
+# or git clone https://github.com/lanisce/cloud-init.git vendors/cloud-init && sudo rm -r $_/.git
 git submodule add https://github.com/lanisce/cloud-init.git vendors/cloud-init
 ```
 
@@ -32,6 +33,7 @@ cd cloud-init
 The `cloud-init` folder structure should look roughly like this
 ```
 .
+├── hetzner.json
 ├── nameservers
 ├── packages
 ├── README.md
@@ -58,8 +60,99 @@ Every file _can_ (optional) have a companion file `*.stat` descibing the file
 - `execute: true`: this will execute the given file instead of fetching it's content
 - `runcmd: true`: if set, the file will be executed on the first boot (! `permissions` has to be executable)
 
+## Provider
+Yet, another cloud provisioning tool.
+Well yeah, but really minimalistic, to get started.
+
+### Hetzner
+You can configure your hetzner cloud environment simply by one json file (`hetzner.json`).
+```json
+{
+  "ssh-key": [
+    { "name": "user", "public-key-from-file": "${HOME}/.ssh/id_rsa.pub" }
+  ],
+  "floating-ip": [
+    { "name": "rancher.lanisce.si", "type": "ipv4", "home-location": "nbg1" }
+  ],
+  "server": [
+    { "name": "rancher", "type": "cx21", "image": "ubuntu-20.04", "location": "hel1", "ssh-key": 0, "network": 0, "#floating-ip": 0 }
+  ],
+  "volume": [
+    { "name": "rancher", "size": "10", "server": 0 }
+  ],
+  "network": [
+    { "name": "kubernetes", "ip-range": "10.98.0.0/16", "#subnets": [
+      { "network-zone": "eu-central", "type": "server", "ip-range": "10.98.0.0/16" }
+    ] }
+  ]
+}
+```
+You can reference resources by setting the row number of the given resource.
+So e.g. `.volume` has a `.server` reference to `.server[0]`. This value will be replaced by the resource id.
+All fields will just be handed over to hcloud. Only exception are fields beginning with `#`. These will be ignored.
+
+When `deploy` (or directly `./scripts/provider/hetzner`) is executed it will try to create all resources.
+```shell
+$ deploy
+👷 found hetzner.json
+
+☁  fetching floating-ip...
+☁  fetching network...
+☁  fetching server...
+☁  fetching ssh-key...
+☁  fetching volume...
+
+🦗 skip ssh-key user (2420225)
+☁  fetching ssh-key...
+
+🦗 skip floating-ip rancher.lanisce.si (369823)
+☁  fetching floating-ip...
+
+🦗 skip network kubernetes (459431)
+☁  fetching network...
+
+🦗 skip server rancher (8713152)
+☁  fetching server...
+
+📦 create volume rancher
+   $ hcloud volume create --name rancher --size 10 --server 8713152
+
+5s [=====================================] 100.00%
+Waiting for volume 8168226 to have been attached to server 8713152
+ ... done
+Volume 8168226 created
+
+☁  fetching volume...
+```
+
+## direnv
+>>> https://direnv.net/
+
+> direnv is an extension for your shell. It augments existing shells with a new feature that can load and unload environment variables depending on the current directory.
+
+```bash
+#!/bin/bash
+
+set -euo pipefail
+
+: "${PATH_BASE:="$(git rev-parse --show-toplevel)"}"
+
+set::path() {
+  # easy access to cloud-init scripts
+  PATH_add "${PATH_BASE}/vendors/cloud-init/scripts"
+  # easy access to needed binaries
+  PATH_add "${PATH_BASE}/vendors/cloud-init/.bin"
+}
+
+main() {
+  set::path
+}
+
+[ -z "${DIRENV_IN_ENVRC}" ] || main
+```
+
 ## Usage
-Just execute `vendors/cloud-init/generate`.
+Just execute `deploy` or `cloud-config`.
 
 ## Environment variables
 You can set options as environment variables.

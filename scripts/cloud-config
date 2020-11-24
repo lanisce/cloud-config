@@ -1,21 +1,15 @@
 #!/bin/bash
 
 set -euo pipefail
+pushd "${BASH_SOURCE[0]%/*}" &>/dev/null && 
+  trap 'popd &>/dev/null' EXIT
 
-# lookup git base folder
-path::git-base() {
-  local base
-  # get super working dir if it's submodule
-  base="$(git rev-parse --show-superproject-working-tree)"
-  # otherwise get default working dir
-  base="${base:-"$(git rev-parse --show-toplevel)"}"
+# source libraries
+source libs/git.sh
 
-  echo "${base}"
-}
-
-# set envs
-: "${CLOUD_PATH_BASE:="$(path::git-base)/cloud-init"}"
-: "${CLOUD_PATH_WRITE_FILES:="${CLOUD_PATH_BASE}/write_files"}"
+# set environment variables
+: "${CLOUD_PATH_CONFIG:="$(git::top)/cloud-init"}"
+: "${CLOUD_PATH_WRITE_FILES:="${CLOUD_PATH_CONFIG}/write_files"}"
 : "${CLOUD_USER:="user"}"
 : "${CLOUD_GROUP:="root"}"
 : "${CLOUD_SSH_PUB:="${HOME}/.ssh/id_rsa.pub"}"
@@ -27,7 +21,7 @@ ssh::pub() {
 }
 
 # generates all files base64 encoded
-cloud::write_files() {
+cloud-config::write_files() {
   local -r path_files="${CLOUD_PATH_WRITE_FILES}"
 
   # go thorugh ./write_files folder
@@ -35,7 +29,9 @@ cloud::write_files() {
     local stat="${file}.stat"
     local content=""
     local path="${file:${#path_files}}"
-    local owner="${CLOUD_USER}:${CLOUD_GROUP}"
+    # todo: sadly files are written before user is create and without user write_files failes
+    # local owner="${CLOUD_USER}:${CLOUD_GROUP}"
+    local owner="root:root"
     local permissions='0655'
 
     [ ! -f "${stat}" ] || {
@@ -58,7 +54,7 @@ EOF
 }
 
 # generate runcmd commands
-cloud::runcmd() {
+cloud-config::runcmd() {
   local -r path_files="${CLOUD_PATH_WRITE_FILES}"
 
   # go through *.stat files
@@ -69,17 +65,17 @@ cloud::runcmd() {
 }
 
 # generate packages list
-cloud::packages() {
-  sed -e 's/^/- /g' "${CLOUD_PATH_BASE}/packages"
+cloud-config::packages() {
+  sed -e 's/^/- /g' "${CLOUD_PATH_CONFIG}/packages"
 }
 
 # generates nameserver list
-cloud::nameservers() {
-  sed -e 's/^/    - /g' "${CLOUD_PATH_BASE}/nameservers"
+cloud-config::nameservers() {
+  sed -e 's/^/    - /g' "${CLOUD_PATH_CONFIG}/nameservers"
 }
 
 # print cloud-config
-cloud::generate() {
+cloud-config::generate() {
   cat <<EOF
 #cloud-config
 
@@ -93,10 +89,10 @@ ssh_pwauth:   0
 manage-resolv-conf: true
 resolv_conf:
   nameservers:
-$(cloud::nameservers)
+$(cloud-config::nameservers)
 
 write_files:
-$(cloud::write_files)
+$(cloud-config::write_files)
 
 users:
 - name: "${CLOUD_USER}"
@@ -110,24 +106,24 @@ users:
     - ALL=(ALL) NOPASSWD:ALL
 
 packages:
-$(cloud::packages)
+$(cloud-config::packages)
 
 runcmd:
-$(cloud::runcmd)
+$(cloud-config::runcmd)
 
 final_message: "The system is finally up, after \$UPTIME seconds"
 EOF
 }
 
 # will be executed if script is called directly
-main() {
-  [ -d "${CLOUD_PATH_BASE}" ] || {
-    echo "🐮 cloud-init path does not exists: ${CLOUD_PATH_BASE}"
+cloud-config() {
+  [ -d "${CLOUD_PATH_CONFIG}" ] || {
+    echo "🐮 cloud-init path does not exists: ${CLOUD_PATH_CONFIG}"
     return 1
   }
 
-  cloud::generate
+  cloud-config::generate
 }
 
 # only execute if called directly
-[[ "${0}" != "${BASH_SOURCE[0]}" ]] || main "${@}"
+[[ "${0}" != "${BASH_SOURCE[0]}" ]] || cloud-config "${@}"

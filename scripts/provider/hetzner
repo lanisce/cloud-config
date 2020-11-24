@@ -1,0 +1,179 @@
+#!/bin/bash
+
+set -euo pipefail
+pushd "${BASH_SOURCE[0]%/*}" &>/dev/null && 
+  trap 'popd &>/dev/null' EXIT
+
+# source libraries
+source ../libs/git.sh
+source ../libs/binaries.sh
+source ../cloud-config
+
+# set environment variables
+: "${CLOUD_PATH_CONFIG:="$(git::top)/cloud-init"}"
+: "${CLOUD_PATH_BASE:="$(git::base)"}"
+: "${CLOUD_PATH_BINARIES:="${CLOUD_PATH_BASE}/.bin"}"
+: "${CLOUD_HETZNER_JSON:="${CLOUD_PATH_CONFIG}/hetzner.json"}"
+
+hetzner::json() {
+  jq "${@}" <(echo "${CLOUD_HETZNER_JSON}")
+}
+
+hetzner::json::edit() {
+  CLOUD_HETZNER_JSON="$(
+    hetzner::json "${@}"
+  )"
+}
+
+hetzner::json::loop() {
+  local what="${1}"
+  [[ "${what:0:1}" == "." ]] ||
+    what=".[\"${what}\"]"
+  local fields="${2:-".id, .name"}"
+  hetzner::json -r "${what} | keys[] as \$i | .[\$i] | [\$i, ${fields}] | @csv" | tr -d '"'
+}
+
+hetzner::create() {
+  local -r what="${1}"; shift
+  local -r hook="$(type -t hetzner::create::hook)"
+
+  local i id name
+  IFS=','; while read -r i id name; do
+    [[ -z "${id}" ]] || {
+      echo -e "🦗 skip \033[3m${what}\033[0m \033[1m${name}\033[0m (${id})"
+      continue
+    }
+
+    mapfile -t fields < <(hetzner::json -r \
+      --arg what "${what}" \
+      --argjson i "${i}" '. as $root |
+        .[$what][$i] 
+          | to_entries 
+          | .[] 
+          | select(
+            .key[:1] != "#"
+          )
+          | select(
+            .value 
+              | type
+              | . == "string" or . == "number"
+            )
+          | "--" + .key, ( 
+            if .value | type == "number" then
+              $root[.key][.value].id
+            else
+              .value
+            end
+        )
+      '
+    )
+    
+    echo -e "📦 create \033[3m${what}\033[0m \033[1m${name}\033[0m"
+    echo -e "   \e[94m$ hcloud" "${what} create" "${fields[@]}" "${@}" "\e[0m"
+    echo
+    hcloud "${what}" create "${fields[@]}" "${@}"
+    echo
+
+    # execute hook if defined
+    [[ -z "${hook-}" ]] ||
+      hetzner::create::hook
+  done < <(hetzner::json::loop "${what}")
+  unset IFS
+
+  # free hook function
+  [[ -z "${hook-}" ]] ||
+    unset -f hetzner::create::hook
+
+  # refresh json
+  hetzner::lookup "${what}"
+}
+
+hetzner::ssh-key() {
+  # create all ssh-keys
+  hetzner::create 'ssh-key'
+}
+
+hetzner::floating-ip() {
+  # create all floating-ips
+  hetzner::create 'floating-ip'
+}
+
+hetzner::network() {
+  # create hook
+  hetzner::create::hook() {
+    local x network_zone type ip_range
+    IFS=','; while read -r x network_zone type ip_range; do
+      echo -e "   ⭐ add \033[3msubnet\033[0m ${ip_range}"
+      echo
+      hcloud network add-subnet "${name}" \
+        --network-zone "${network_zone}" \
+        --type "${type}" \
+        --ip-range "${ip_range}"
+      echo
+    done < <(hetzner::json::loop ".network[${i}][\"#subnets\"]" '.["network-zone"], .type, .["ip-range"]')
+    unset IFS
+  }
+  # create all networks if not already
+  hetzner::create 'network'
+}
+
+hetzner::server() {
+  # create hook
+  hetzner::create::hook() {
+    local findex fid
+    findex="$(hetzner::json -r ".server[${i}][\"#floating-ip\"]")"
+    [[ -n "${findex}" ]] ||
+      return 0
+
+    fid="$(hetzner::json -r ".[\"floating-ip\"][${findex}].id")"
+    hcloud floating-ip assign "${fid}" "${name}"
+    echo
+  }
+  # create all networks if not already
+  hetzner::create 'server' --user-data-from-file <(cloud-config::generate)
+}
+
+hetzner::volume() {
+  # create all volumes
+  hetzner::create 'volume'
+}
+
+hetzner::lookup() {
+  local resources="${1-}"
+  [[ -n "${resources}" ]] ||
+    mapfile -t resources < <(hetzner::json -r 'keys[]')
+
+  for resource in "${resources[@]}"; do 
+    echo -e "☁️  fetching \033[3m${resource}\033[0m..."
+
+    hetzner::json::edit -r \
+      --argfile remote <(hcloud "${resource}" list -ojson) \
+      --arg field "${resource}" 'if $remote == null then . else
+        .[$field] = [ .[$field][] | .name as $name | 
+          . + reduce $remote[] as $item ({}; 
+            if $item.name == $name then $item | {id} else . end
+          ) 
+        ]
+      end'
+  done
+}
+
+hetzner() {
+  # collect hetzner.json and substitute
+  [[ ! -f "${CLOUD_HETZNER_JSON}" ]] ||
+    CLOUD_HETZNER_JSON="$(envsubst <"${CLOUD_HETZNER_JSON}")"
+
+  # resource provisioning
+  hetzner::lookup; echo
+  hetzner::ssh-key; echo
+  hetzner::floating-ip; echo
+  hetzner::network; echo
+  hetzner::server; echo
+  hetzner::volume; echo
+
+  # print out result
+  hetzner::json '.' > "${CLOUD_PATH_CONFIG}/hetzner.dump.json"
+}
+
+# only execute if called directly
+[[ "${0}" != "${BASH_SOURCE[0]}" ]] || hetzner "${@}"

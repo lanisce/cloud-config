@@ -1,0 +1,31 @@
+#!/bin/bash
+
+set -euo pipefail
+pushd "${BASH_SOURCE[0]%/*}" &>/dev/null && 
+  trap 'popd &>/dev/null' EXIT
+
+# source libraries
+source libs/git.sh
+source libs/verbose.sh 
+
+# set environment variables
+: "${CLOUD_PATH_CONFIG:="$(git::top)/cloud-init"}"
+
+# main function
+deploy() {
+  # check what to do
+  if [[ -f "${CLOUD_PATH_CONFIG}/hetzner.json" ]]; then
+    # load provider
+    source provider/hetzner
+    # execute provider provisioning
+    echo -e "👷 found hetzner.json"
+    echo
+    hetzner
+  else
+    echo -e "🤷 nothing to do.."
+    echo
+  fi
+}
+
+# only execute if called directly
+[[ "${0}" != "${BASH_SOURCE[0]}" ]] || deploy "${@}"
