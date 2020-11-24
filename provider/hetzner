@@ -159,6 +159,14 @@ hetzner::lookup() {
 }
 
 hetzner() {
+  # check if there is a active context
+  context="$(hcloud context active)"
+  [ -n "${context}" ] || {
+    echo -e "err: 🥶 select a hcloud context"
+    return 2
+  }
+  echo -e "🔏 hcloud \033[3mcontext\033[0m \033[1m${context}\033[0m"
+
   # collect hetzner.json and substitute
   [[ ! -f "${CLOUD_HETZNER_JSON}" ]] ||
     CLOUD_HETZNER_JSON="$(envsubst <"${CLOUD_HETZNER_JSON}")"

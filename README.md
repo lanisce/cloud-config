@@ -91,7 +91,7 @@ You can reference resources by setting the row number of the given resource.
 So e.g. `.volume` has a `.server` reference to `.server[0]`. This value will be replaced by the resource id.
 All fields will just be handed over to hcloud. Only exception are fields beginning with `#`. These will be ignored.
 
-When `deploy` (or directly `./scripts/provider/hetzner`) is executed it will try to create all resources.
+When `deploy` (or directly `./provider/hetzner`) is executed it will try to create all resources.
 ```shell
 $ deploy
 👷 found hetzner.json
@@ -139,7 +139,7 @@ set -euo pipefail
 
 set::path() {
   # easy access to cloud-init scripts
-  PATH_add "${PATH_BASE}/vendors/cloud-init/scripts"
+  PATH_add "${PATH_BASE}/vendors/cloud-init"
   # easy access to needed binaries
   PATH_add "${PATH_BASE}/vendors/cloud-init/.bin"
 }
