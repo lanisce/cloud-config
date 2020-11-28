@@ -30,8 +30,8 @@ cloud-config::write_files() {
     local content=""
     local path="${file:${#path_files}}"
     # todo: sadly files are written before user is create and without user write_files failes
-    # local owner="${CLOUD_USER}:${CLOUD_GROUP}"
-    local owner="root:root"
+    local owner="${CLOUD_USER}:${CLOUD_GROUP}"
+    # local owner="root:root"
     local permissions='0655'
 
     [ ! -f "${stat}" ] || {
@@ -41,6 +41,8 @@ cloud-config::write_files() {
         permissions="$(sed -En 's/^permissions: (.+)$/\1/p' "${stat}")"
       ! grep -q '^execute: true$' "${stat}" ||
         content="$(bash "${file}")"
+      ! grep -q '^envsubst: true$' "${stat}" ||
+        content="$(envsubst <"${file}")"
     }
 
     cat <<EOF
@@ -86,6 +88,10 @@ package_reboot_if_required: true
 disable_root: 1
 ssh_pwauth:   0
 
+mounts:
+# One of the first things you should do is secure the shared memory used on the system.
+- [ tmpfs, /run/shm, "tmpfs", "ro,noexec,nosuid", "0", "0" ]
+
 manage-resolv-conf: true
 resolv_conf:
   nameservers:
@@ -109,6 +115,10 @@ packages:
 $(cloud-config::packages)
 
 runcmd:
+# https://bugs.launchpad.net/cloud-init/+bug/1486113/comments/12
+- cloud-init single --name write_files --frequency once
+# run the rest not as root
+- su - "${CLOUD_USER}"
 $(cloud-config::runcmd)
 
 final_message: "The system is finally up, after \$UPTIME seconds"

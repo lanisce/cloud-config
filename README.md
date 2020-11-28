@@ -59,6 +59,7 @@ Every file _can_ (optional) have a companion file `*.stat` descibing the file
 - `permissions: <octal permission>`: default is `0655`
 - `execute: true`: this will execute the given file instead of fetching it's content
 - `runcmd: true`: if set, the file will be executed on the first boot (! `permissions` has to be executable)
+- `envsubst: true`: this will substitute environment variables within the file
 
 ## Provider
 Yet, another cloud provisioning tool.
