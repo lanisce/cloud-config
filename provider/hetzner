@@ -35,29 +35,28 @@ hetzner::json::loop() {
 
 hetzner::create() {
   local -r what="${1}"; shift
-  local -r hook="$(type -t hetzner::create::hook)"
+  local -r create_after="$(type -t hetzner::create::after)"
+  local -r create_hook="$(type -t hetzner::create::hook)"
 
   local i id name
-  IFS=','; while read -r i id name; do
+  while IFS=',' read -r i id name; do
     [[ -z "${id}" ]] || {
       echo -e "🦗 skip \033[3m${what}\033[0m \033[1m${name}\033[0m (${id})"
+
+      # execute hook if defined
+      [[ -z "${create_after-}" ]] ||
+        hetzner::create::after
+
       continue
     }
 
-    mapfile -t fields < <(hetzner::json -r \
+    # fetch all fields
+    mapfile -t fields < <(hetzner::json -rc \
       --arg what "${what}" \
       --argjson i "${i}" '. as $root |
         .[$what][$i] 
           | to_entries 
           | .[] 
-          | select(
-            .key[:1] != "#"
-          )
-          | select(
-            .value 
-              | type
-              | . == "string" or . == "number"
-            )
           | "--" + .key, ( 
             if .value | type == "number" then
               $root[.key][.value].id
@@ -67,22 +66,38 @@ hetzner::create() {
         )
       '
     )
-    
+
+    # filter args from fields
+    local field
+    declare -a args
+    for (( x=0; x < ${#fields[@]}; x=x+2 )); do
+      [[ "${fields[x]:2:1}" != "#" ]] ||
+        continue
+
+      args+=("${fields[x]}" "${fields[x + 1]}")
+    done
+
+    # check for create hook
+    cmd=( 'hcloud' "${what}" 'create' "${args[@]}" "${@}" )
+    [[ -z "${create_hook-}" ]] ||
+      cmd=( "hetzner::create::hook" "${cmd[@]}" )
+
     echo -e "📦 create \033[3m${what}\033[0m \033[1m${name}\033[0m"
-    echo -e "   \e[94m$ hcloud" "${what} create" "${fields[@]}" "${@}" "\e[0m"
+    echo -e "   \e[94m$ " "${cmd[@]}" "\e[0m"
     echo
-    hcloud "${what}" create "${fields[@]}" "${@}"
+    "${cmd[@]}"
     echo
 
     # execute hook if defined
-    [[ -z "${hook-}" ]] ||
-      hetzner::create::hook
+    [[ -z "${create_after-}" ]] ||
+      hetzner::create::after
   done < <(hetzner::json::loop "${what}")
   unset IFS
 
-  # free hook function
-  [[ -z "${hook-}" ]] ||
-    unset -f hetzner::create::hook
+  # free hook functions
+  unset -f \
+    hetzner::create::hook \
+    hetzner::create::after
 
   # refresh json
   hetzner::lookup "${what}"
@@ -100,9 +115,9 @@ hetzner::floating-ip() {
 
 hetzner::network() {
   # create hook
-  hetzner::create::hook() {
+  hetzner::create::after() {
     local x network_zone type ip_range
-    IFS=','; while read -r x network_zone type ip_range; do
+    while IFS=',' read -r x network_zone type ip_range; do
       echo -e "   ⭐ add \033[3msubnet\033[0m ${ip_range}"
       echo
       hcloud network add-subnet "${name}" \
@@ -110,16 +125,21 @@ hetzner::network() {
         --type "${type}" \
         --ip-range "${ip_range}"
       echo
-    done < <(hetzner::json::loop ".network[${i}][\"#subnets\"]" '.["network-zone"], .type, .["ip-range"]')
+    done < <(
+      hetzner::json::loop \
+        ".network[${i}][\"#subnets\"]" '.["network-zone"], .type, .["ip-range"]' \
+        2>/dev/null
+    )
     unset IFS
   }
+
   # create all networks if not already
   hetzner::create 'network'
 }
 
 hetzner::server() {
   # create hook
-  hetzner::create::hook() {
+  hetzner::create::after() {
     local findex fid
     findex="$(hetzner::json -r ".server[${i}][\"#floating-ip\"]")"
     [[ -n "${findex}" ]] ||
@@ -129,8 +149,28 @@ hetzner::server() {
     hcloud floating-ip assign "${fid}" "${name}"
     echo
   }
-  # create all networks if not already
-  hetzner::create 'server' --user-data-from-file <(cloud-config::generate)
+  # execute hook within a subshell to keep envs clean
+  hetzner::create::hook() { (
+    local cloud_d
+    # set environment variables
+    for (( i=0; i < ${#fields[@]}; i=$i+2 )); do
+      field="${fields[i]#--}"
+
+      # set CLOUD_PATHD for multiple configs
+      [[ "${field}" != "#cloud.d" ]] ||
+        export CLOUD_PATHD="${fields[i+1]}"
+
+      # set for cloud-config script
+      field="$(echo "${field^^}" | sed "s/[^A-Z]/_/g")"
+      export "CLOUD_ENV_${field}"="${fields[i+1]}"
+    done
+
+    # execute command
+    "${@}" --user-data-from-file <(cloud-config::generate)
+  ) }
+    
+  # create all servers
+  hetzner::create 'server'
 }
 
 hetzner::volume() {
@@ -177,7 +217,7 @@ hetzner() {
   hetzner::floating-ip; echo
   hetzner::network; echo
   hetzner::server; echo
-  hetzner::volume; echo
+  #hetzner::volume; echo
 
   # print out result
   hetzner::json '.' > "${CLOUD_PATH_CONFIG}/hetzner.dump.json"

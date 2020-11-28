@@ -6,10 +6,11 @@ pushd "${BASH_SOURCE[0]%/*}" &>/dev/null &&
 
 # source libraries
 source libs/git.sh
+source libs/binaries.sh
 
 # set environment variables
-: "${CLOUD_PATH_CONFIG:="$(git::top)/cloud-init"}"
-: "${CLOUD_PATH_WRITE_FILES:="${CLOUD_PATH_CONFIG}/write_files"}"
+: "${CLOUD_PATH:="$(git::top)/cloud-init"}"
+: "${CLOUD_PATHD:=""}"
 : "${CLOUD_USER:="user"}"
 : "${CLOUD_GROUP:="root"}"
 : "${CLOUD_SSH_PUB:="${HOME}/.ssh/id_rsa.pub"}"
@@ -20,15 +21,29 @@ ssh::pub() {
   cut -d' ' -f-2 "${CLOUD_SSH_PUB}"
 }
 
+# returns all config paths
+cloud-config::paths() {
+  local file="${1-}"
+  echo "${CLOUD_PATH}${file}"
+
+  unset IFS; 
+  mapfile -t paths <<<"${CLOUD_PATHD//:/$'\n'}"
+  [[ -n "${paths[*]}" ]] || return 0
+
+  for path in "${paths[@]}"; do
+    echo "${CLOUD_PATH}/cloud.d/${path}${file}"
+  done
+}
+
 # generates all files base64 encoded
 cloud-config::write_files() {
-  local -r path_files="${CLOUD_PATH_WRITE_FILES}"
+  mapfile -t paths <<<"$(cloud-config::paths '/write_files')"
 
   # go thorugh ./write_files folder
-  for file in $(find "${path_files}" -type f -not -name '*.stat'); do
+  unset IFS; for file in $(find "${paths[@]}" -type f -not -name '*.stat' 2>/dev/null); do
     local stat="${file}.stat"
     local content=""
-    local path="${file:${#path_files}}"
+    local path="/${file#"${CLOUD_PATH}"*/write_files/}"
     # todo: sadly files are written before user is create and without user write_files failes
     local owner="${CLOUD_USER}:${CLOUD_GROUP}"
     # local owner="root:root"
@@ -55,25 +70,40 @@ EOF
   done
 }
 
+# add export variables
+cloud-config::runcmd::environment() {
+  echo '# set environment variables'
+  local -r lookup="CLOUD_ENV_"
+
+  # go though all envs and filter pattern
+  local name
+  while read -r name; do
+    echo "- export ${name#"${lookup}"}='${!name//\'/\\\'}'"
+  done < <(env | sed -nE 's/^('"${lookup}"'[^=]+).+$/\1/p')
+}
+
 # generate runcmd commands
-cloud-config::runcmd() {
-  local -r path_files="${CLOUD_PATH_WRITE_FILES}"
+cloud-config::runcmd::executables() {
+  echo '# run executable scripts'
+  mapfile -t paths <<<"$(cloud-config::paths '/write_files')"
 
   # go through *.stat files
-  find "${path_files}" -type f -name '*.stat' -exec bash -c '
+  find "${paths[@]}" -type f -name '*.stat' -exec bash -c '
     ! grep -q "^runcmd: true$" "${1}" ||
-      echo "- ${1:'${#path_files}':-5}"
-  ' _ {} \;
+      echo "- /${1#"${CLOUD_PATH}"*/write_files/}"
+  ' _ {} \; 2>/dev/null
 }
 
 # generate packages list
 cloud-config::packages() {
-  sed -e 's/^/- /g' "${CLOUD_PATH_CONFIG}/packages"
+  mapfile -t paths <<<"$(cloud-config::paths '/packages')"
+  cat "${paths[@]}" 2>/dev/null | uniq
 }
 
 # generates nameserver list
 cloud-config::nameservers() {
-  sed -e 's/^/    - /g' "${CLOUD_PATH_CONFIG}/nameservers"
+  mapfile -t paths <<<"$(cloud-config::paths '/nameservers')"
+  cat "${paths[@]}" 2>/dev/null | uniq
 }
 
 # print cloud-config
@@ -92,10 +122,13 @@ mounts:
 # One of the first things you should do is secure the shared memory used on the system.
 - [ tmpfs, /run/shm, "tmpfs", "ro,noexec,nosuid", "0", "0" ]
 
+packages:
+$(cloud-config::packages | sed -e 's_^_- _')
+
 manage-resolv-conf: true
 resolv_conf:
   nameservers:
-$(cloud-config::nameservers)
+$(cloud-config::nameservers | sed -e 's_^_  - _')
 
 write_files:
 $(cloud-config::write_files)
@@ -105,21 +138,19 @@ users:
   lock_passwd: true
   shell: /bin/bash
   ssh-authorized-keys:
-    - "$(ssh::pub)"
+  - "$(ssh::pub)"
   groups:
-    - docker
+  - docker
   sudo:
-    - ALL=(ALL) NOPASSWD:ALL
-
-packages:
-$(cloud-config::packages)
+  - ALL=(ALL) NOPASSWD:ALL
 
 runcmd:
 # https://bugs.launchpad.net/cloud-init/+bug/1486113/comments/12
 - cloud-init single --name write_files --frequency once
 # run the rest not as root
-- su - "${CLOUD_USER}"
-$(cloud-config::runcmd)
+- su - ${CLOUD_USER}
+$(cloud-config::runcmd::environment)
+$(cloud-config::runcmd::executables)
 
 final_message: "The system is finally up, after \$UPTIME seconds"
 EOF
@@ -127,11 +158,10 @@ EOF
 
 # will be executed if script is called directly
 cloud-config() {
-  [ -d "${CLOUD_PATH_CONFIG}" ] || {
-    echo "🐮 cloud-init path does not exists: ${CLOUD_PATH_CONFIG}"
+  [ -d "${CLOUD_PATH}" ] || {
+    echo "🐮 cloud-init path does not exists: ${CLOUD_PATH}"
     return 1
   }
-
   cloud-config::generate
 }
 
