@@ -61,6 +61,48 @@ Every file _can_ (optional) have a companion file `*.stat` descibing the file
 - `runcmd: true`: if set, the file will be executed on the first boot (! `permissions` has to be executable)
 - `envsubst: true`: this will substitute environment variables within the file
 
+## Environment variables
+You can set options as environment variables.
+- `CLOUD_USER`: default user
+- `CLOUD_GROUP`: default group
+- `CLOUD_SSH`: ssh public key to use (_default_: `${HOME}/.ssh/id_rsa.pub`)
+
+All server parameters, within the `hetzner.json`, will be exposed within the `cloud-config` generater.
+
+> e.g. `{ "name": "myserver", "location": "hel1" }` will be availible as `${NAME}` and `${LOCATION}`.
+
+You can also expose envs into the `cloud-config` generater like `${CLOUD_ENV_*}`. `CLOUD_ENV_` will be stripped.
+
+> e.g. `CLOUD_ENV_FOO=bar cloud-config` will be available as `${FOO}`.
+
+## Sub configurations
+If you have to generate different `cloud-config`'s you can create the following folder structure.
+
+```
+.
+├── hetzner.json
+├── nameservers
+├── packages
+├── README.md
+└── write_files
+    ├── etc
+    │   └── ...
+    └── cloud.d
+        └── <cloud.d name>
+            ├── packages
+            └── write_files
+                └── etc
+                    └── ...
+```
+
+You can add `<cloud.d name(s)>` either as environment variable 
+
+> `CLOUD_PATHD="<cloud.d name 1>[:<cloud.d name 2>:<cloud.d name 3>]"`
+
+or reference them within your `hetzner.json` with 
+
+> `{ ..., "#cloud.d": "<cloud.d name 1>[:<cloud.d name 2>:<cloud.d name 3>]" }`
+
 ## Provider
 Yet, another cloud provisioning tool.
 Well yeah, but really minimalistic, to get started.
@@ -125,41 +167,6 @@ Volume 8168226 created
 
 ☁  fetching volume...
 ```
-
-## Environment variables
-You can set options as environment variables.
-- `CLOUD_USER`: default user
-- `CLOUD_GROUP`: default group
-- `CLOUD_SSH`: ssh public key to use (_default_: `${HOME}/.ssh/id_rsa.pub`)
-
-All server parameters, within the `hetzner.json`, will be exposed within the `cloud-config` generater.
-e.g. `{ "name": "myserver", "location": "hel1" }` will be availible as `${NAME}` and `${LOCATION}`.
-
-You can also expose envs into the `cloud-config` generater like `${CLOUD_ENV_*}`. `CLOUD_ENV_` will be stripped.
-e.g. `CLOUD_ENV_FOO=bar cloud-config` will be available as `${FOO}`.
-
-## Sub configurations
-If you have to generate different `cloud-config`'s you can create the following folder structure.
-
-```
-.
-├── hetzner.json
-├── nameservers
-├── packages
-├── README.md
-└── write_files
-    ├── etc
-    │   └── ...
-    └── cloud.d
-        └── <cloud.d name>
-            ├── packages
-            └── write_files
-                └── etc
-                    └── ...
-```
-
-You can add `<cloud.d name(s)>` either as environment variable `CLOUD_PATHD="<cloud.d name 1>[:<cloud.d name 2>:<cloud.d name 3>]"`
-or reference them within your `hetzner.json` with `{ ..., "#cloud.d": "<cloud.d name 1>[:<cloud.d name 2>:<cloud.d name 3>]" }`.
 
 ## direnv
 >>> https://direnv.net/
