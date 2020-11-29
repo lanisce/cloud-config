@@ -45,12 +45,9 @@ The `cloud-init` folder structure should look roughly like this
     │       └── interfaces.d
     │           ├── 60-floating-ip.cfg
     │           └── 60-floating-ip.cfg.stat
-    └── var
-        └── lib
-            └── cloud
-                └── files
-                    ├── bootstrap.sh
-                    └── bootstrap.sh.stat
+    └── bootstrap
+        ├── initialize.sh
+        └── initialize.sh.stat
 ```
 
 ### APT configuration
