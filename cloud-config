@@ -106,6 +106,19 @@ cloud-config::nameservers() {
   cat "${paths[@]}" 2>/dev/null | uniq
 }
 
+# add apt configuration
+cloud-config::apt() {
+  mapfile -t paths <<<"$(cloud-config::paths '/apt')"
+  cat "${paths[@]}" 2>/dev/null | uniq
+
+  mapfile -t paths <<<"$(cloud-config::paths '/sources.list.d')"
+  echo "sources:"
+  find "${paths[@]}" -type f -exec bash -c '
+    echo "  $(basename "${1}"):"
+    cat "${1}" | sed -e "s_^_    _"
+  ' _ {} \; 2>/dev/null
+}
+
 # print cloud-config
 cloud-config::generate() {
   cat <<EOF
@@ -121,6 +134,9 @@ ssh_pwauth:   0
 mounts:
 # One of the first things you should do is secure the shared memory used on the system.
 - [ tmpfs, /run/shm, "tmpfs", "ro,noexec,nosuid", "0", "0" ]
+
+apt:
+$(cloud-config::apt | sed -e 's_^_    _')
 
 packages:
 $(cloud-config::packages | sed -e 's_^_- _')
@@ -162,7 +178,8 @@ cloud-config() {
     echo "🐮 cloud-init path does not exists: ${CLOUD_PATH}"
     return 1
   }
-  cloud-config::generate
+  #cloud-config::generate
+  cloud-config::apt
 }
 
 # only execute if called directly

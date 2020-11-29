@@ -37,6 +37,8 @@ The `cloud-init` folder structure should look roughly like this
 ├── nameservers
 ├── packages
 ├── README.md
+├── source.list
+│   └── docker.list
 └── write_files
     ├── etc
     │   └── network
@@ -49,6 +51,24 @@ The `cloud-init` folder structure should look roughly like this
                 └── files
                     ├── bootstrap.sh
                     └── bootstrap.sh.stat
+```
+
+### APT configuration
+You can any cloud-init apt configuration into the `apt` file.
+
+Also every file within `source.list` will be added as apt source.
+
+```yaml
+# example docker.list
+source: "deb [arch=amd64] https://download.docker.com/linux/ubuntu $RELEASE stable"
+# content of
+# curl -s https://download.docker.com/linux/ubuntu/gpg | xclip -selection clipboard
+key: | 
+  -----BEGIN PGP PUBLIC KEY BLOCK-----
+
+  mQINBFit2ioBEADhWpZ8/wvZ6hUTiXOwQHXMAlaFHcPH9hAtr4F1y2+OYdbtMuth
+  [...]
+  -----END PGP PUBLIC KEY BLOCK-----
 ```
 
 ### `write_files` folder
@@ -80,6 +100,7 @@ If you have to generate different `cloud-config`'s you can create the following 
 
 ```
 .
+├── apt
 ├── hetzner.json
 ├── nameservers
 ├── packages
