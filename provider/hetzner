@@ -10,10 +10,30 @@ source ../libs/binaries.sh
 source ../cloud-config
 
 # set environment variables
-: "${CLOUD_PATH_CONFIG:="$(git::top)/cloud-init"}"
+: "${CLOUD_PATH:="$(git::top)/cloud-init"}"
 : "${CLOUD_PATH_BASE:="$(git::base)"}"
 : "${CLOUD_PATH_BINARIES:="${CLOUD_PATH_BASE}/.bin"}"
-: "${CLOUD_HETZNER_JSON:="${CLOUD_PATH_CONFIG}/hetzner.json"}"
+: "${CLOUD_HETZNER_JSON:="${CLOUD_PATH}/hetzner.json"}"
+
+: "${CLOUD_DRY_RUN_PATH:="${CLOUD_PATH}/dry-run"}"
+: "${CLOUD_DRY_RUN_FILE_CMD:="${CLOUD_DRY_RUN_PATH}/dry-run-cmd.log"}"
+: "${CLOUD_DRY_RUN_PATH_CLOUDCONFIG:="${CLOUD_DRY_RUN_PATH}/cloud-config"}"
+
+dry-run::cmd() {
+  mkdir -p "${CLOUD_DRY_RUN_PATH}"
+  if [ -n "${CLOUD_DRY_RUN-}" ]; then
+    echo "${@}" | tee -a "${CLOUD_DRY_RUN_FILE_CMD}"
+  else
+    "${@}"
+  fi
+}
+dry-run::cloud-config() {
+  mkdir -p "${CLOUD_DRY_RUN_PATH_CLOUDCONFIG}"
+  if [ -n "${CLOUD_DRY_RUN-}" ]; then
+    echo -n "${2}" > "${CLOUD_DRY_RUN_PATH_CLOUDCONFIG}/${1}.conf"
+  fi
+  echo -n "${2}"
+}
 
 hetzner::json() {
   jq "${@}" <(echo "${CLOUD_HETZNER_JSON}")
@@ -51,6 +71,7 @@ hetzner::create() {
     }
 
     # fetch all fields
+    # shellcheck disable=2016
     mapfile -t fields < <(hetzner::json -rc \
       --arg what "${what}" \
       --argjson i "${i}" '. as $root |
@@ -58,8 +79,17 @@ hetzner::create() {
           | to_entries 
           | .[] 
           | "--" + .key, ( 
-            if .value | type == "number" then
+            if .value 
+              | type == "number" 
+            then
               $root[.key][.value].id
+            elif .value 
+              | type == "array" 
+            then
+              [ .key as $key
+                | .value[] 
+                | $root[$key][.].id
+              ] | @csv
             else
               .value
             end
@@ -69,16 +99,16 @@ hetzner::create() {
 
     # filter args from fields
     local field
-    declare -a args
+    local -a cmd=() args=()
     for (( x=0; x < ${#fields[@]}; x=x+2 )); do
       [[ "${fields[x]:2:1}" != "#" ]] ||
         continue
 
-      args+=("${fields[x]}" "${fields[x + 1]}")
+      args+=("${fields[x]/%#*}" "${fields[x + 1]}")
     done
 
     # check for create hook
-    cmd=( 'hcloud' "${what}" 'create' "${args[@]}" "${@}" )
+    cmd=( 'dry-run::cmd' 'hcloud' "${what}" 'create' "${args[@]}" "${@}" )
     [[ -z "${create_hook-}" ]] ||
       cmd=( "hetzner::create::hook" "${cmd[@]}" )
 
@@ -116,18 +146,31 @@ hetzner::floating-ip() {
 hetzner::network() {
   # create hook
   hetzner::create::after() {
+    # todo make this prettier...
     local x network_zone type ip_range
-    while IFS=',' read -r x network_zone type ip_range; do
+    local -a subargs
+    subargs=()
+
+    while IFS=',' read -r x network_zone type ip_range vswitch_id; do
       echo -e "   ⭐ add \033[3msubnet\033[0m ${ip_range}"
+      # check if subnet exists already
+      if hcloud network describe "${name}" | grep -q "${ip_range}"; then
+        echo -e "🦗 skip \033[3msubnet\033[0m \033[1m${ip_range}\033[0m"
+        continue
+      fi
       echo
-      hcloud network add-subnet "${name}" \
+
+      [ -z "${vswitch_id}" ] ||
+        subargs+=("--vswitch-id" "${vswitch_id}")
+
+      dry-run::cmd hcloud network add-subnet "${name}" \
         --network-zone "${network_zone}" \
         --type "${type}" \
-        --ip-range "${ip_range}"
+        --ip-range "${ip_range}" "${subargs[@]}"
       echo
     done < <(
       hetzner::json::loop \
-        ".network[${i}][\"#subnets\"]" '.["network-zone"], .type, .["ip-range"]' \
+        ".network[${i}][\"#subnets\"]" '.["network-zone"], .type, .["ip-range"], .["vswitch-id"]' \
         2>/dev/null
     )
     unset IFS
@@ -146,14 +189,13 @@ hetzner::server() {
       return 0
 
     fid="$(hetzner::json -r ".[\"floating-ip\"][${findex}].id")"
-    hcloud floating-ip assign "${fid}" "${name}"
+    dry-run::cmd hcloud floating-ip assign "${fid}" "${name}"
     echo
   }
   # execute hook within a subshell to keep envs clean
   hetzner::create::hook() { (
-    local cloud_d
     # set environment variables
-    for (( i=0; i < ${#fields[@]}; i=$i+2 )); do
+    for (( i=0; i < ${#fields[@]}; i=i+2 )); do
       field="${fields[i]#--}"
 
       # set CLOUD_PATHD for multiple configs
@@ -161,12 +203,14 @@ hetzner::server() {
         export CLOUD_PATHD="${fields[i+1]}"
 
       # set for cloud-config script
+      # shellcheck disable=SC2001
       field="$(echo "${field^^}" | sed "s/[^A-Z]/_/g")"
-      export "CLOUD_ENV_${field}"="${fields[i+1]}"
+      export "CLOUD_ENV_${field}=${fields[i+1]}"
     done
 
     # execute command
-    "${@}" --user-data-from-file <(cloud-config::generate)
+    dry-run::cmd "${@}" \
+      --user-data-from-file <(dry-run::cloud-config "${name}" "$(cloud-config::generate)")
   ) }
     
   # create all servers
@@ -186,6 +230,7 @@ hetzner::lookup() {
   for resource in "${resources[@]}"; do 
     echo -e "☁️  fetching \033[3m${resource}\033[0m..."
 
+    # shellcheck disable=2016
     hetzner::json::edit -r \
       --argfile remote <(hcloud "${resource}" list -ojson) \
       --arg field "${resource}" 'if $remote == null then . else
@@ -207,9 +252,14 @@ hetzner() {
   }
   echo -e "🔏 hcloud \033[3mcontext\033[0m \033[1m${context}\033[0m"
 
+  # check if there are instructions
+  if [[ ! -f "${CLOUD_HETZNER_JSON}" ]]; then 
+    echo -e "err: 🥶 no such file: ${CLOUD_HETZNER_JSON}"
+    return 3
+  fi
+
   # collect hetzner.json and substitute
-  [[ ! -f "${CLOUD_HETZNER_JSON}" ]] ||
-    CLOUD_HETZNER_JSON="$(envsubst <"${CLOUD_HETZNER_JSON}")"
+  CLOUD_HETZNER_JSON="$(envsubst <"${CLOUD_HETZNER_JSON}")"
 
   # resource provisioning
   hetzner::lookup; echo
@@ -217,10 +267,10 @@ hetzner() {
   hetzner::floating-ip; echo
   hetzner::network; echo
   hetzner::server; echo
-  #hetzner::volume; echo
+  hetzner::volume; echo
 
   # print out result
-  hetzner::json '.' > "${CLOUD_PATH_CONFIG}/hetzner.dump.json"
+  hetzner::json '.' > "${CLOUD_PATH}/hetzner.dump.json"
 }
 
 # only execute if called directly

@@ -15,6 +15,21 @@ source libs/binaries.sh
 : "${CLOUD_GROUP:="root"}"
 : "${CLOUD_SSH_PUB:="${HOME}/.ssh/id_rsa.pub"}"
 
+# error handling
+# shellcheck disable=SC2181
+stacktrace() {
+  code="${?}"
+  [ "${code}" -eq 0 ] || {
+    echo -e "\n\033[38;5;196m■■ Stacktrace(${code}): \e[1m${BASH_COMMAND}\e[22m"
+    for i in $(seq 1 $((${#FUNCNAME[@]} - 2))); do
+      echo -e "${i}. ${BASH_SOURCE[$i]}:${BASH_LINENO[$i]} ➜ ${FUNCNAME[$i]}()"
+    done
+    echo -e "\033[0m"
+  }
+}
+# trap stacktrace EXIT
+
+
 # readout local pub key
 ssh::pub() {
   # read out pub key without hostname
@@ -24,7 +39,6 @@ ssh::pub() {
 # returns all config paths
 cloud-config::paths() {
   local file="${1-}"
-  echo "${CLOUD_PATH}${file}"
 
   unset IFS; 
   mapfile -t paths <<<"${CLOUD_PATHD//:/$'\n'}"
@@ -33,36 +47,52 @@ cloud-config::paths() {
   for path in "${paths[@]}"; do
     echo "${CLOUD_PATH}/cloud.d/${path}${file}"
   done
+
+  echo "${CLOUD_PATH}${file}"
 }
 
 # generates all files base64 encoded
+# shellcheck disable=2044
 cloud-config::write_files() {
   mapfile -t paths <<<"$(cloud-config::paths '/write_files')"
+  local written_paths
 
   # go thorugh ./write_files folder
   unset IFS; for file in $(find "${paths[@]}" -type f -not -name '*.stat' 2>/dev/null); do
-    local stat="${file}.stat"
-    local content=""
     local path="/${file#"${CLOUD_PATH}"*/write_files/}"
+    echo "${written_paths:-}" | grep -Evq "(:|^)${path}:" || continue
+    written_paths+="${path}:"
+
+    local stat="${file}.stat"
     # todo: sadly files are written before user is create and without user write_files failes
     local owner="${CLOUD_USER}:${CLOUD_GROUP}"
     # local owner="root:root"
     local permissions='0655'
+    local content vars
 
+    content="$(cat "${file}")"
     [ ! -f "${stat}" ] || {
       ! grep -Eq '^owner: .+$' "${stat}" ||
         owner="$(sed -En 's/^owner: (.+)$/\1/p' "${stat}")"
       ! grep -Eq '^permissions: .+$' "${stat}" ||
         permissions="$(sed -En 's/^permissions: (.+)$/\1/p' "${stat}")"
       ! grep -q '^execute: true$' "${stat}" ||
-        content="$(bash "${file}")"
+        content="$(bash -c "${content}")"
+      ! grep -Eq '^envsubst: .+$' "${stat}" || {
+        vars="$(sed -En 's/^envsubst: (.+)$/\1/p' "${stat}")"
+        if [ "${vars}" = "true" ]; then
+          content="$(envsubst < <(echo "${content}"))"
+        else
+          content="$(envsubst "${vars}" < <(echo "${content}"))"
+        fi
+      }
       ! grep -q '^envsubst: true$' "${stat}" ||
         content="$(envsubst <"${file}")"
     }
 
     cat <<EOF
 - encoding: b64
-  content: $(echo "${content:-"$(cat "${file}")"}" | base64 -w0)
+  content: $(echo "${content}" | base64 -w0)
   path: "${path}"
   owner: ${owner}
   permissions: '${permissions}'
@@ -72,7 +102,6 @@ EOF
 
 # add export variables
 cloud-config::runcmd::environment() {
-  echo '# set environment variables'
   local -r lookup="CLOUD_ENV_"
 
   # go though all envs and filter pattern
@@ -83,15 +112,21 @@ cloud-config::runcmd::environment() {
 }
 
 # generate runcmd commands
+# shellcheck disable=2044
 cloud-config::runcmd::executables() {
-  echo '# run executable scripts'
   mapfile -t paths <<<"$(cloud-config::paths '/write_files')"
+  local written_paths path
 
   # go through *.stat files
-  find "${paths[@]}" -type f -name '*.stat' -exec bash -c '
-    ! grep -q "^runcmd: true$" "${1}" ||
-      echo "- /${1#"${CLOUD_PATH}"*/write_files/}"
-  ' _ {} \; 2>/dev/null
+  unset IFS; for file in $(find "${paths[@]}" -type f -name '*.stat' 2>/dev/null); do
+    ! grep -q '^runcmd: true$' "${file}" || {
+      path="/${file#"${CLOUD_PATH}"*/write_files/}"
+      echo "${written_paths:-}" | grep -Evq "(:|^)${path}:" || continue
+      written_paths+="${path}:"
+      
+      echo "- ${path/%.stat}"
+    }  
+  done
 }
 
 # generate packages list
@@ -163,10 +198,10 @@ users:
 runcmd:
 # https://bugs.launchpad.net/cloud-init/+bug/1486113/comments/12
 - cloud-init single --name write_files --frequency once
-# run the rest not as root
-- su - ${CLOUD_USER}
+# set environment variables
 $(cloud-config::runcmd::environment)
-$(cloud-config::runcmd::executables)
+# run executable scripts
+$(cloud-config::runcmd::executables | sort)
 
 final_message: "The system is finally up, after \$UPTIME seconds"
 EOF
@@ -178,8 +213,9 @@ cloud-config() {
     echo "🐮 cloud-init path does not exists: ${CLOUD_PATH}"
     return 1
   }
-  #cloud-config::generate
-  cloud-config::apt
+
+  # generate complete cloud-config
+  cloud-config::generate
 }
 
 # only execute if called directly
