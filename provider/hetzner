@@ -185,7 +185,7 @@ hetzner::server() {
   hetzner::create::after() {
     local findex fid
     findex="$(hetzner::json -r ".server[${i}][\"#floating-ip\"]")"
-    [[ -n "${findex}" ]] ||
+    [ "${findex}" != "null" ] ||
       return 0
 
     fid="$(hetzner::json -r ".[\"floating-ip\"][${findex}].id")"

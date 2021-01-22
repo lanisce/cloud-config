@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=2044
 
 set -euo pipefail
 pushd "${BASH_SOURCE[0]%/*}" &>/dev/null && 
@@ -13,27 +14,14 @@ source libs/binaries.sh
 : "${CLOUD_PATHD:=""}"
 : "${CLOUD_USER:="user"}"
 : "${CLOUD_GROUP:="root"}"
-: "${CLOUD_SSH_PUB:="${HOME}/.ssh/id_rsa.pub"}"
-
-# error handling
-# shellcheck disable=SC2181
-stacktrace() {
-  code="${?}"
-  [ "${code}" -eq 0 ] || {
-    echo -e "\n\033[38;5;196m■■ Stacktrace(${code}): \e[1m${BASH_COMMAND}\e[22m"
-    for i in $(seq 1 $((${#FUNCNAME[@]} - 2))); do
-      echo -e "${i}. ${BASH_SOURCE[$i]}:${BASH_LINENO[$i]} ➜ ${FUNCNAME[$i]}()"
-    done
-    echo -e "\033[0m"
-  }
-}
-# trap stacktrace EXIT
-
+: "${CLOUD_PATH_PUB:="${HOME}/.ssh"}"
 
 # readout local pub key
 ssh::pub() {
   # read out pub key without hostname
-  cut -d' ' -f-2 "${CLOUD_SSH_PUB}"
+  unset IFS; for pub in $(find "${CLOUD_PATH_PUB}" -type f -name '*.pub'); do
+    cut -d' ' -f-2 "${pub}"
+  done
 }
 
 # returns all config paths
@@ -42,7 +30,6 @@ cloud-config::paths() {
 
   unset IFS; 
   mapfile -t paths <<<"${CLOUD_PATHD//:/$'\n'}"
-  [[ -n "${paths[*]}" ]] || return 0
 
   for path in "${paths[@]}"; do
     echo "${CLOUD_PATH}/cloud.d/${path}${file}"
@@ -52,7 +39,6 @@ cloud-config::paths() {
 }
 
 # generates all files base64 encoded
-# shellcheck disable=2044
 cloud-config::write_files() {
   mapfile -t paths <<<"$(cloud-config::paths '/write_files')"
   local written_paths
@@ -189,7 +175,7 @@ users:
   lock_passwd: true
   shell: /bin/bash
   ssh-authorized-keys:
-  - "$(ssh::pub)"
+$(ssh::pub | sed -e 's_^_  - _')
   groups:
   - docker
   sudo:
