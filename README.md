@@ -77,12 +77,14 @@ Every file _can_ (optional) have a companion file `*.stat` descibing the file
 - `execute: true`: this will execute the given file instead of fetching it's content
 - `runcmd: true`: if set, the file will be executed on the first boot (! `permissions` has to be executable)
 - `envsubst: true`: this will substitute environment variables within the file
+  - You can also set a specific variable (e.g. `envsubst: $HOME`)
 
 ## Environment variables
 You can set options as environment variables.
 - `CLOUD_USER`: default user
 - `CLOUD_GROUP`: default group
-- `CLOUD_SSH`: ssh public key to use (_default_: `${HOME}/.ssh/id_rsa.pub`)
+- `CLOUD_PATH_PUB`: ssh public keys to use (_default_: `${HOME}/.ssh`)
+  - It will search for all `*.pub` files within this folder.
 
 All server parameters, within the `hetzner.json`, will be exposed within the `cloud-config` generater.
 
@@ -121,6 +123,9 @@ or reference them within your `hetzner.json` with
 
 > `{ ..., "#cloud.d": "<cloud.d name 1>[:<cloud.d name 2>:<cloud.d name 3>]" }`
 
+It will go through every `cloud.d` configurations and finally use default.
+`cloud-config` will only use the first occurence of a file and ignore duplicates.
+
 ## Provider
 Yet, another cloud provisioning tool.
 Well yeah, but really minimalistic, to get started.
@@ -150,6 +155,7 @@ You can configure your hetzner cloud environment simply by one json file (`hetzn
 ```
 You can reference resources by setting the row number of the given resource.
 So e.g. `.volume` has a `.server` reference to `.server[0]`. This value will be replaced by the resource id.
+You can also specify multiple references like `"ssh-key": [0, 1, 4]`.
 All fields will just be handed over to hcloud. Only exception are fields beginning with `#`. These will be ignored.
 
 When `deploy` (or directly `./provider/hetzner`) is executed it will try to create all resources.
